@@ -1,0 +1,83 @@
+name: Mirror third-party .deb into APT repo
+
+on:
+  schedule:
+    # every day at 00:00 UTC
+    - cron:  '0 0 * * *'
+  workflow_dispatch:
+
+env:
+  # **Replace** these with the upstream owner/repo you want to mirror:
+  UPSTREAM_OWNER: coder
+  UPSTREAM_REPO:  code-server
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out gh-pages branch
+      uses: actions/checkout@v3
+      with:
+        ref: gh-pages
+        persist-credentials: true
+
+    - name: Install dpkg-dev (for dpkg-scanpackages)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y dpkg-dev
+
+    - name: Download .deb assets from upstream Release
+      uses: actions/github-script@v6
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+          const owner = process.env.UPSTREAM_OWNER;
+          const repo  = process.env.UPSTREAM_REPO;
+
+          // 1) get latest Release
+          const release = await github.rest.repos.getLatestRelease({ owner, repo });
+
+          // 2) list its assets & pick all .deb files
+          const assets = await github.rest.repos.listReleaseAssets({
+            owner, repo,
+            release_id: release.data.id
+          });
+          const debs = assets.data.filter(a => a.name.endsWith('.deb'));
+          if (debs.length === 0) throw new Error('No .deb assets found on latest release');
+
+          // 3) download each .deb into pool/
+          fs.mkdirSync('pool', { recursive: true });
+
+          for (const deb of debs) {
+            console.log(`🔍 Fetching ${deb.name}…`);
+            const download = await github.request({
+              method: 'GET',
+              url: deb.url,
+              headers: { accept: 'application/octet-stream' }
+            });
+            const dest = path.join('pool', deb.name);
+            fs.writeFileSync(dest, Buffer.from(download.data, 'binary'));
+            console.log(`✅ Saved to ${dest}`);
+          }
+
+    - name: Regenerate APT index
+      run: |
+        mkdir -p dists/any/main/binary-amd64
+        dpkg-scanpackages pool /dev/null \
+          | gzip -9c > dists/any/main/binary-amd64/Packages.gz
+
+    - name: Commit & push if updated
+      run: |
+        git config user.name  "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+        git add pool dists
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "APT mirror: update to $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          git push origin gh-pages
+        fi
