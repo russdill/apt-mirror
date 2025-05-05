@@ -1,5 +1,8 @@
 name: Mirror third-party .deb into APT repo
 
+permissions:
+  contents: write
+
 on:
   schedule:
     # every day at 00:00 UTC
