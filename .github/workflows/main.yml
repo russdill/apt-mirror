@@ -30,6 +30,30 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y dpkg-dev
 
+    - name: Check for new release
+      id: check_release
+      uses: actions/github-script@v6
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const owner = process.env.UPSTREAM_OWNER;
+          const repo  = process.env.UPSTREAM_REPO;
+          const latest = await github.rest.repos.getLatestRelease({ owner, repo });
+          const id = String(latest.data.id);
+          // read last stored ID
+          let prev = '0';
+          try {
+            prev = require('fs').readFileSync('last_release_id.txt', 'utf8').trim();
+          } catch { /* file may not exist */ }
+          core.setOutput('changed', id !== prev);
+          core.setOutput('id', id);
+
+    - name: Bail if no new release
+      if: steps.check_release.outputs.changed == 'false'
+      run: |
+        echo "No new release; skipping download and index."
+        exit 0
+
     - name: Download .deb assets from upstream Release
       uses: actions/github-script@v6
       with:
@@ -69,8 +93,12 @@ jobs:
     - name: Regenerate APT index
       run: |
         mkdir -p dists/any/main/binary-amd64
-        dpkg-scanpackages pool /dev/null \
+        dpkg-scanpackages --arch amd64 pool /dev/null \
           | gzip -9c > dists/any/main/binary-amd64/Packages.gz
+
+    - name: Write new release ID
+      run: |
+        echo "${{ steps.check_release.outputs.id }}" > last_release_id.txt
 
     - name: Commit & push if updated
       run: |
