@@ -5,8 +5,8 @@ permissions:
 
 on:
   schedule:
-    # every day at 00:00 UTC
-    - cron:  '0 0 * * *'
+    # every month at day 1, 00:00 UTC
+    - cron:  '0 0 1 * *'
   workflow_dispatch:
 
 env:
